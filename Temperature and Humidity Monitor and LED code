@@ -1,0 +1,299 @@
+#include <WiFi.h>
+#include <WebServer.h>
+#include <Adafruit_Sensor.h>
+#include <DHT.h>
+#include <DHT_U.h>
+
+// Access Point credentials for LED control
+const char* ssid_led = "ESP32-LED-AP";
+const char* password_led = "12345678";
+
+// DHT sensor setup
+#define DHTPIN 4 // GPIO pin connected to DHT11
+#define DHTTYPE DHT11
+DHT dht(DHTPIN, DHTTYPE);
+
+// LED pin
+#define LED_PIN 14
+
+// Create WebServer instance
+WebServer server(80);
+
+// LED state
+bool ledState = false;
+
+// HTML content for LED control
+void handleRoot() {
+    String html = R"rawliteral(
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>ESP32 LED Control</title>
+      <style>
+        body {
+          font-family: Arial, sans-serif;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          height: 100vh;
+          margin: 0;
+          background: linear-gradient(45deg, #6a6a6a, #3a3a3a);
+          color: white;
+        }
+        h1 {
+          margin-bottom: 20px;
+        }
+        .led {
+          width: 50px;
+          height: 50px;
+          border-radius: 50%;
+          background-color: red;
+          box-shadow: 0 0 20px red;
+          margin-bottom: 20px;
+          transition: background-color 0.3s ease, box-shadow 0.3s ease;
+        }
+        .led.off {
+          background-color: #111;
+          box-shadow: 0 0 10px black;
+        }
+        button {
+          padding: 10px 20px;
+          font-size: 16px;
+          border: none;
+          border-radius: 5px;
+          background-color: #444;
+          color: white;
+          cursor: pointer;
+          transition: background-color 0.3s ease;
+        }
+        button:hover {
+          background-color: #666;
+        }
+      </style>
+    </head>
+    <body>
+      <h1>ESP32 LED Control</h1>
+      <div id="led" class="led"></div>
+      <button id="toggleBtn">Turn ON</button>
+
+      <script>
+        const led = document.getElementById('led');
+        const toggleBtn = document.getElementById('toggleBtn');
+
+        function updateLED(state) {
+            if (state === "ON") {
+                led.classList.add('off');
+                toggleBtn.textContent = 'Turn OFF';
+            } else {
+                led.classList.remove('off');
+                toggleBtn.textContent = 'Turn ON';
+            }
+        }
+
+        toggleBtn.addEventListener('click', () => {
+            const action = toggleBtn.textContent === 'Turn ON' ? '/led/on' : '/led/off';
+            fetch(action)
+                .then(() => {
+                    updateLED(toggleBtn.textContent === 'Turn ON' ? "ON" : "OFF");
+                })
+                .catch(err => console.error("Error:", err));
+        });
+
+        fetch('/led/state')
+            .then(response => response.text())
+            .then(updateLED)
+            .catch(err => console.error("Error fetching initial state:", err));
+      </script>
+    </body>
+    </html>
+    )rawliteral";
+    server.send(200, "text/html", html);
+}
+
+void handleLEDOn() {
+    ledState = true;
+    digitalWrite(LED_PIN, HIGH);
+    server.send(200, "text/plain", "ON");
+}
+
+void handleLEDOff() {
+    ledState = false;
+    digitalWrite(LED_PIN, LOW);
+    server.send(200, "text/plain", "OFF");
+}
+
+void handleLEDState() {
+    server.send(200, "text/plain", ledState ? "ON" : "OFF");
+}
+
+// HTML content for Temperature and Humidity Monitor
+void handleSensorPage() {
+    String html = R"rawliteral(
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Temperature and Humidity Monitor</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            background: linear-gradient(135deg, #2c3e50, #4b79a1);
+            animation: bgAnimation 10s infinite alternate;
+            color: #fff;
+        }
+
+        @keyframes bgAnimation {
+            0% { background: linear-gradient(135deg, #2c3e50, #4b79a1); }
+            50% { background: linear-gradient(135deg, #1f2833, #3a3d40); }
+            100% { background: linear-gradient(135deg, #0f2027, #203a43); }
+        }
+
+        h1 { color: #fff; font-size: 2.5rem; text-shadow: 2px 2px 5px rgba(0, 0, 0, 0.5); }
+
+        .container { display: flex; justify-content: space-around; width: 80%; gap: 20px; }
+
+        .gauge-wrapper { display: flex; flex-direction: column; align-items: center; }
+
+        .gauge { width: 150px; height: 300px; position: relative; border-radius: 25px; overflow:hidden; box-shadow:0 0 15px rgba(255,255,255,0.3); border:3px solid rgba(255,255,255,0.5); background rgba(255,255,255,0.1); backdrop-filter blur(10px); }
+
+        .thermometer,
+        .humidity { position:absolute; bottom=0; width=100%; transition=height (1s), background (1s); }
+
+        .thermometer { background=linear-gradient(to top,#ff3333,#ffcccc); }
+
+        .humidity { background=linear-gradient(to top,#3399ff,#cce5ff); }
+
+        .label,.emoji { text-align:center; margin-top=10px; font-weight:bold; color:#fff; text-shadow=1px 1px 3px rgba(0,0,0,.5); }
+
+        .emoji { font-size=3rem; margin-top=10px; transition=transform (0.5s), color (0.5s); }
+
+        .glow { animation:pulseGlow (2s) infinite; }
+
+        @keyframes pulseGlow { 
+            0%,100% { box-shadow=0 0 15px rgba(255,255,255,.5); }
+            50% { box-shadow=0 0 25px rgba(255,255,255,.8); }
+         }
+    </style>
+</head>
+<body>
+    <h1>Temperature and Humidity Monitor</h1>
+    <div class="container">
+        <div class="gauge-wrapper">
+            <div class="gauge glow">
+                <div id="thermometer" class="thermometer"></div>
+            </div>
+            <div class="label">Temperature:<span id="tempValue">0</span>°C</div>
+            <div class="emoji" id="tempEmoji">🌡</div>
+        </div>
+        <div class="gauge-wrapper">
+            <div class="gauge glow">
+                <div id="humidity" class="humidity"></div>
+            </div>
+            <div class="label">Humidity:<span id="humValue">0</span>%</div>
+            <div class="emoji" id="humEmoji">💧</div>
+        </div>
+    </div>
+    <script>
+        async function fetchSensorData() {
+            const response = await fetch('/data');
+            const data = await response.json();
+
+            updateTemperature(data.temperature);
+            updateHumidity(data.humidity);
+        }
+
+        function updateTemperature(temp) {
+            const thermometer = document.getElementById('thermometer');
+            const tempValue = document.getElementById('tempValue');
+            const tempEmoji = document.getElementById('tempEmoji');
+
+            const height = Math.min(Math.max(temp / 50 * 100, 0),100); // Clamp to [0-100]%
+            thermometer.style.height=`${height}%`;
+            tempValue.textContent=temp;
+
+             tempEmoji.textContent=temp >35?"🔥":temp<15?"🥶":"🌞";
+         }
+
+         function updateHumidity(hum) {
+             const humidity=document.getElementById('humidity');
+             const humValue=document.getElementById('humValue');
+             const humEmoji=document.getElementById('humEmoji');
+
+             const height=Math.min(Math.max(hum,0),100); // Clamp to [0-100]%
+             humidity.style.height=`${height}%`;
+             humValue.textContent=hum;
+
+             humEmoji.textContent=hum >70?"💦":hum<30?"🌱":"💧";
+         }
+
+         setInterval(fetchSensorData,2000);
+     </script>
+ </body>
+ </html>)rawliteral";
+ server.send(200,"text/html",html);
+}
+
+// Serve sensor data as JSON
+void handleSensorData() {
+    float temperature = dht.readTemperature();
+    float humidity = dht.readHumidity();
+
+    if (isnan(temperature) || isnan(humidity)) {
+        temperature = 0.0;
+        humidity = 0.0;
+    }
+
+    String json = "{";
+    json += "\"temperature\": " + String(temperature) + ",";
+    json += "\"humidity\": " + String(humidity);
+    json += "}";
+
+    server.send(200,"application/json",json);
+}
+
+void setup() {
+    // Initialize Serial Monitor
+    Serial.begin(115200);
+
+    // Configure LED pin
+    pinMode(LED_PIN, OUTPUT);
+    digitalWrite(LED_PIN, LOW);
+
+    // Initialize DHT sensor
+    dht.begin();
+
+   // Create Access Point for LED control
+   WiFi.softAP(ssid_led,password_led);
+
+   // Start the server
+   server.begin();
+
+   // Define web server routes
+   server.on("/",handleRoot);
+
+   // Define routes for LED control
+   server.on("/led/on",handleLEDOn);
+   server.on("/led/off",handleLEDOff);
+   server.on("/led/state",handleLEDState);
+
+   // Define routes for DHT sensor data
+   server.on("/sensor",handleSensorPage);
+   server.on("/data",handleSensorData);
+
+   Serial.println("Access Point started.");
+}
+
+void loop() {
+   // Handle client requests
+   server.handleClient();
+}
