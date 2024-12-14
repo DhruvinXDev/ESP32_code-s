@@ -1,0 +1,273 @@
+#include <WiFi.h>
+#include <WebServer.h>
+
+// Set up the web server on port 80
+WebServer server(80);
+
+// Ultrasonic sensor pins
+#define TRIG_PIN 5
+#define ECHO_PIN 18
+
+// Tank height in centimeters (15 cm max distance)
+const float maxDistance = 15.0;  // 15 cm
+
+long duration;
+float distance;
+float waterLevel;
+
+// Function to get water level percentage from ultrasonic sensor
+float getWaterLevelPercentage() {
+  // Trigger the ultrasonic sensor
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+
+  // Read the echo time
+  duration = pulseIn(ECHO_PIN, HIGH);
+
+  // Calculate the distance (in cm)
+  distance = duration * 0.034 / 2;  // Convert to centimeters
+
+  // Calculate the water level as a percentage
+  if (distance >= maxDistance) {
+    return 0;  // Tank is empty (no water detected)
+  } else {
+    waterLevel = maxDistance - distance;
+    return (waterLevel / maxDistance) * 100;  // Return percentage
+  }
+}
+
+// HTML template for the web page with dynamic water level
+String createHTML(float levelPercentage) {
+  String html = R"rawliteral(
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Water Level Monitoring</title>
+  <style>
+    /* Universal styles */
+    body {
+      font-family: 'Arial', sans-serif;
+      background: linear-gradient(45deg, #141e30, #243b55);
+      color: white;
+      text-align: center;
+      margin: 0;
+      padding: 0;
+      animation: backgroundAnimation 15s infinite alternate;
+    }
+
+    /* Background animation */
+    @keyframes backgroundAnimation {
+      0% { background: linear-gradient(45deg, #141e30, #243b55); }
+      25% { background: linear-gradient(45deg, #1e3c72, #2a5298); }
+      50% { background: linear-gradient(45deg, #243b55, #6b6b83); }
+      75% { background: linear-gradient(45deg, #6b6b83, #0f2027); }
+      100% { background: linear-gradient(45deg, #0f2027, #141e30); }
+    }
+
+    /* Container for the water tank and labels */
+    .container {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      padding: 20px;
+    }
+
+    /* Tank design */
+    .tank {
+      width: 150px;
+      height: 400px;
+      border-radius: 10px;
+      border: 4px solid white;
+      position: relative;
+      background-color: #222;
+      margin: 0 auto;
+      overflow: hidden;
+    }
+
+    /* Water element inside the tank */
+    .water {
+      width: 100%;
+      position: absolute;
+      bottom: 0;
+      height: 0%; /* Initially, height is 0% */
+      border-bottom-left-radius: 7px;
+      border-bottom-right-radius: 7px;
+      transition: height 0.5s ease-in-out, background-color 0.5s ease-in-out;
+    }
+
+    /* Colors for different levels of water */
+    @keyframes shimmer {
+      0%, 100% { background-position: 0% 50%; }
+      50% { background-position: 100% 50%; }
+    }
+
+    /* Add ripple effect animation */
+    .water::after {
+      content: "";
+      position: absolute;
+      top: -10px;
+      left: 50%;
+      width: 200%;
+      height: 200%;
+      background: radial-gradient(circle, rgba(255, 255, 255, 0.3) 10%, transparent 70%);
+      transform: translateX(-50%) scale(0);
+      animation: ripple 4s infinite ease-out;
+    }
+
+    @keyframes ripple {
+      0% {
+        transform: translateX(-50%) scale(0);
+        opacity: 1;
+      }
+      100% {
+        transform: translateX(-50%) scale(1);
+        opacity: 0;
+      }
+    }
+
+    /* Heading style */
+    h1 {
+      font-size: 2.5em;
+      margin: 20px 0;
+      text-shadow: 2px 2px #000;
+    }
+
+    /* Label style for displaying the percentage */
+    .label {
+      font-size: 1.8em;
+      font-weight: bold;
+      margin-top: 20px;
+      transition: color 0.3s ease-in-out;
+    }
+
+    /* Responsive layout adjustments */
+    @media only screen and (max-width: 600px) {
+      .tank {
+        width: 100px;
+        height: 250px;
+      }
+      h1 {
+        font-size: 2em;
+      }
+      .label {
+        font-size: 1.5em;
+      }
+    }
+  </style>
+  <script>
+    // Function to get the water color based on the level
+    function getWaterColor(level) {
+      if (level > 75) {
+        return 'linear-gradient(to bottom, #00ff00, #009900)'; // Green
+      } else if (level > 50) {
+        return 'linear-gradient(to bottom, #ffff00, #cccc00)'; // Yellow
+      } else if (level > 25) {
+        return 'linear-gradient(to bottom, #ff9900, #cc6600)'; // Orange
+      } else {
+        return 'linear-gradient(to bottom, #ff0000, #990000)'; // Red
+      }
+    }
+
+    // Function to get the text color based on the water level
+    function getTextColor(level) {
+      if (level > 75) {
+        return '#00ff00'; // Green
+      } else if (level > 50) {
+        return '#ffff00'; // Yellow
+      } else if (level > 25) {
+        return '#ff9900'; // Orange
+      } else {
+        return '#ff0000'; // Red
+      }
+    }
+
+    // Function to fetch the water level and update the tank
+    async function fetchWaterLevel() {
+      try {
+        // Fetch the actual water level from the server
+        const response = await fetch("/water_level");
+        const data = await response.json();
+
+        const waterElement = document.querySelector('.water');
+        const labelElement = document.querySelector('.label');
+
+        // Update the height of the water inside the tank based on the fetched level
+        waterElement.style.height = `${data.level}%`; // Update water height based on the level
+        waterElement.style.background = getWaterColor(data.level); // Update water color based on the level
+
+        // Update the label text and its color based on the level
+        labelElement.textContent = `Water Level: ${data.level}%`;
+        labelElement.style.color = getTextColor(data.level);
+      } catch (error) {
+        console.error('Error fetching water level:', error);
+      }
+    }
+
+    // Fetch the water level every second
+    setInterval(fetchWaterLevel, 1000); // Update every second
+  </script>
+</head>
+<body>
+  <h1>Water Level Monitoring System</h1>
+  <div class="container">
+    <div class="tank">
+      <div class="water" style="height: 0%;"></div> <!-- Water height starts at 0% -->
+    </div>
+    <p class="label" style="color: #ffff00;">Water Level: 0%</p> <!-- Initial label text -->
+  </div>
+</body>
+</html>
+  )rawliteral";
+
+  // Replace dynamic content in HTML
+  html.replace("height: 0%;", "height: " + String(levelPercentage) + "%;");
+  html.replace("Water Level: 0%", "Water Level: " + String(levelPercentage) + "%");
+  html.replace("style='color: #ffff00;'", "style='color: " + getTextColor(levelPercentage) + ";'");
+
+  return html;
+}
+
+void setup() {
+  // Initialize serial for debugging
+  Serial.begin(115200);
+
+  // Set ultrasonic sensor pins
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+
+  // Set up ESP32 as an access point
+  const char* ssid = "ESP32-WaterLevel";
+  const char* password = "12345678";
+  WiFi.softAP(ssid, password);
+
+  Serial.println("Access Point started");
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.softAPIP());  // Print the IP address
+
+  // Serve the web page
+  server.on("/", HTTP_GET, []() {
+    float level = getWaterLevelPercentage();  // Get water level percentage
+    String html = createHTML(level);  // Generate HTML
+    server.send(200, "text/html", html);
+  });
+
+  // Endpoint to return water level as JSON
+  server.on("/water_level", HTTP_GET, []() {
+    float level = getWaterLevelPercentage();  // Get water level percentage
+    String json = "{\"level\": " + String(level) + "}";
+    server.send(200, "application/json", json);
+  });
+
+  // Start the server
+  server.begin();
+}
+
+void loop() {
+  // Handle incoming requests
+  server.handleClient();
+}
