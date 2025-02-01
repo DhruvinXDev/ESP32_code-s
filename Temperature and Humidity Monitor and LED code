@@ -4,7 +4,7 @@
 #include <DHT.h>
 #include <DHT_U.h>
 
-// Access Point credentials for LED control
+// Access Point credentials For LED control
 const char* ssid_led = "ESP32-LED-AP";
 const char* password_led = "12345678";
 
